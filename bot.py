@@ -25,7 +25,9 @@ main_kb = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True
 )
-
+@dp.message(Command("getid"))
+async def get_id(message: types.Message):
+    await message.answer(f"ID этого чата: `{message.chat.id}`", parse_mode="Markdown")
 @dp.message(Command("start"))
 async def start(message: types.Message):
     waiting_for_table[message.from_user.id] = True
