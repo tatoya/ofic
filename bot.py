@@ -10,8 +10,8 @@ from aiogram.fsm.state import State, StatesGroup
 logging.basicConfig(level=logging.INFO)
 
 # ========== НАСТРОЙКИ (ВСТАВЬТЕ СВОИ ЗНАЧЕНИЯ) ==========
-BOT_TOKEN = "8968223046:AAElVRvXmwK4ABqud6504aywfwf_T4DqxHE"  # ВАШ ТОКЕН
-ADMIN_CHAT_ID = -3914847632  # ID ГРУППЫ
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))
 # =========================================================
 
 bot = Bot(token=BOT_TOKEN)
