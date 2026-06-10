@@ -1,26 +1,22 @@
 import asyncio
 import logging
+import os
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 
 logging.basicConfig(level=logging.INFO)
 
-# ========== НАСТРОЙКИ (ВСТАВЬТЕ СВОИ ЗНАЧЕНИЯ) ==========
+# ========== ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ==========
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))
-# =========================================================
+# =========================================
 
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
-
-class Form(StatesGroup):
-    waiting_for_table = State()
+dp = Dispatcher()
 
 user_tables = {}
+waiting_for_table = {}
 
 main_kb = ReplyKeyboardMarkup(
     keyboard=[
@@ -30,60 +26,63 @@ main_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-cancel_kb = ReplyKeyboardMarkup(
-    keyboard=[[KeyboardButton(text="❌ Отмена")]],
-    resize_keyboard=True
-)
-
 @dp.message(Command("start"))
-async def start(message: types.Message, state: FSMContext):
-    await state.set_state(Form.waiting_for_table)
-    await message.answer("🍽️ Добро пожаловать!\n\nВведите номер вашего стола:", reply_markup=cancel_kb)
+async def start(message: types.Message):
+    waiting_for_table[message.from_user.id] = True
+    await message.answer(
+        "🍽️ Добро пожаловать!\n\nВведите номер вашего стола:",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="❌ Отмена")]],
+            resize_keyboard=True
+        )
+    )
 
-@dp.message(Form.waiting_for_table)
-async def get_table(message: types.Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("Отменено. Отправьте /start для начала.", reply_markup=types.ReplyKeyboardRemove())
-        return
-    
+@dp.message(lambda msg: msg.text == "❌ Отмена")
+async def cancel(message: types.Message):
+    waiting_for_table.pop(message.from_user.id, None)
+    user_tables.pop(message.from_user.id, None)
+    await message.answer("Отменено. Отправьте /start", reply_markup=ReplyKeyboardRemove())
+
+@dp.message(lambda msg: waiting_for_table.get(msg.from_user.id, False))
+async def get_table(message: types.Message):
     try:
         table_num = int(message.text)
         user_tables[message.from_user.id] = table_num
-        await state.clear()
-        await message.answer(f"🍽️ Стол №{table_num}\n\nВыберите действие:", reply_markup=main_kb)
+        waiting_for_table.pop(message.from_user.id, None)
+        await message.answer(
+            f"🍽️ Стол №{table_num}\n\nВыберите действие:",
+            reply_markup=main_kb
+        )
     except ValueError:
-        await message.answer("Пожалуйста, введите номер стола цифрами.")
+        await message.answer("Введите номер стола цифрами.")
 
-@dp.message(lambda m: m.text == "🛎️ Позвать официанта")
+@dp.message(lambda msg: msg.text == "🛎️ Позвать официанта")
 async def call_waiter(message: types.Message):
     table = user_tables.get(message.from_user.id)
     if not table:
-        await message.answer("Сначала отправьте /start и укажите номер стола.")
+        await message.answer("Сначала /start и номер стола")
         return
     await bot.send_message(ADMIN_CHAT_ID, f"🛎️ ВЫЗОВ ОФИЦИАНТА — Стол {table}")
-    await message.answer(f"✅ Официант уведомлён о вызове со стола {table}!")
+    await message.answer(f"✅ Официант уведомлён!")
 
-@dp.message(lambda m: m.text == "💰 Рассчитать счёт")
+@dp.message(lambda msg: msg.text == "💰 Рассчитать счёт")
 async def ask_bill(message: types.Message):
     table = user_tables.get(message.from_user.id)
     if not table:
-        await message.answer("Сначала отправьте /start и укажите номер стола.")
+        await message.answer("Сначала /start и номер стола")
         return
     await bot.send_message(ADMIN_CHAT_ID, f"💰 ЗАПРОС СЧЁТА — Стол {table}")
-    await message.answer(f"✅ Счёт принесут на стол {table}.")
+    await message.answer(f"✅ Счёт принесут!")
 
 @dp.message(Command("reset"))
-async def reset(message: types.Message, state: FSMContext):
-    if message.from_user.id in user_tables:
-        del user_tables[message.from_user.id]
-    await state.clear()
-    await message.answer("Стол сброшен. Отправьте /start.", reply_markup=types.ReplyKeyboardRemove())
+async def reset(message: types.Message):
+    user_tables.pop(message.from_user.id, None)
+    waiting_for_table.pop(message.from_user.id, None)
+    await message.answer("Сброшено. Отправьте /start", reply_markup=ReplyKeyboardRemove())
 
 async def main():
-    print("Бот запускается...")
+    print("🚀 Бот запущен")
     await bot.delete_webhook(drop_pending_updates=True)
-    print("Webhook очищен")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
