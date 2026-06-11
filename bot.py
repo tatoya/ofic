@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
@@ -12,7 +13,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))
 # =========================================
 
-# Проверка переменных
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не задан")
 if not ADMIN_CHAT_ID:
@@ -21,9 +21,9 @@ if not ADMIN_CHAT_ID:
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Хранилища
-user_tables = {}
-waiting_for_table = {}
+# Хранилище данных пользователей
+user_tables = {}      # user_id -> номер стола
+waiting_for_table = {} # user_id -> ожидание ввода стола
 
 # Клавиатуры
 main_kb = ReplyKeyboardMarkup(
@@ -34,43 +34,98 @@ main_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-cancel_kb = ReplyKeyboardMarkup(
-    keyboard=[[KeyboardButton(text="❌ Отмена")]],
-    resize_keyboard=True
-)
+# ========== ФУНКЦИЯ ОЧИСТКИ В 03:00 ==========
+async def daily_cleanup():
+    """Очищает все данные пользователей каждый день в 03:00 по Москве"""
+    while True:
+        now = datetime.now()
+        # Следующие 03:00 по Москве
+        next_cleanup = now.replace(hour=3, minute=0, second=0, microsecond=0)
+        
+        # Если текущее время уже позже 03:00, переносим на завтра
+        if now >= next_cleanup:
+            next_cleanup += timedelta(days=1)
+        
+        # Сколько секунд ждать до 03:00
+        seconds_to_wait = (next_cleanup - now).total_seconds()
+        
+        # Переводим в часы и минуты для красивого вывода
+        hours = int(seconds_to_wait // 3600)
+        minutes = int((seconds_to_wait % 3600) // 60)
+        logging.info(f"⏰ Следующая очистка данных через {hours} ч {minutes} мин (в 03:00 по Москве)")
+        
+        # Ждём до 03:00
+        await asyncio.sleep(seconds_to_wait)
+        
+        # Очищаем все данные
+        user_tables.clear()
+        waiting_for_table.clear()
+        
+        logging.info("🧹 Очистка данных пользователей выполнена в 03:00 {}".format(datetime.now()))
+        
+        # Отправляем уведомление админу
+        try:
+            await bot.send_message(ADMIN_CHAT_ID, "🧹 Данные пользователей очищены (03:00 по Москве)")
+        except:
+            pass
 
-# ========== КОМАНДА /getid (ВРЕМЕННАЯ) ==========
-@dp.message(Command("getid"))
-async def get_chat_id(message: types.Message):
-    """Узнать ID текущего чата"""
-    await message.answer(
-        f"📌 ID этого чата:\n`{message.chat.id}`",
-        parse_mode="Markdown"
-    )
+# ========== ОБРАБОТЧИКИ ==========
 
-# ========== ОСНОВНЫЕ КОМАНДЫ ==========
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    waiting_for_table[message.from_user.id] = True
+    user_id = message.from_user.id
+    
+    # Проверяем, есть ли у пользователя сохранённый стол
+    if user_id in user_tables:
+        old_table = user_tables[user_id]
+        await message.answer(
+            f"🍽️ У вас уже выбран стол №{old_table}\n\n"
+            f"Хотите использовать его или ввести новый?\n\n"
+            f"• Введите номер стола для смены\n"
+            f"• Или нажмите кнопку ниже",
+            reply_markup=ReplyKeyboardMarkup(
+                keyboard=[[KeyboardButton(text="🔄 Оставить текущий стол")]],
+                resize_keyboard=True
+            )
+        )
+        waiting_for_table[user_id] = True
+        return
+    
+    waiting_for_table[user_id] = True
     await message.answer(
         "🍽️ Добро пожаловать!\n\nВведите номер вашего стола:",
-        reply_markup=cancel_kb
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="❌ Отмена")]],
+            resize_keyboard=True
+        )
     )
+
+@dp.message(lambda msg: msg.text == "🔄 Оставить текущий стол")
+async def keep_table(message: types.Message):
+    user_id = message.from_user.id
+    table = user_tables.get(user_id)
+    if table:
+        waiting_for_table.pop(user_id, None)
+        await message.answer(
+            f"🍽️ Стол №{table}\n\nВыберите действие:",
+            reply_markup=main_kb
+        )
+    else:
+        await message.answer("Ошибка. Отправьте /start заново.")
 
 @dp.message(lambda msg: msg.text == "❌ Отмена")
 async def cancel(message: types.Message):
     waiting_for_table.pop(message.from_user.id, None)
     user_tables.pop(message.from_user.id, None)
-    await message.answer("❌ Отменено. Отправьте /start для начала.", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Отменено. Отправьте /start", reply_markup=ReplyKeyboardRemove())
 
 @dp.message(lambda msg: waiting_for_table.get(msg.from_user.id, False))
 async def get_table(message: types.Message):
     try:
-        table_num = int(message.text.strip())
+        table_num = int(message.text)
         if table_num < 1 or table_num > 100:
-            await message.answer("Номер стола должен быть от 1 до 100. Попробуйте ещё раз:")
+            await message.answer("Номер стола от 1 до 100. Попробуйте ещё раз:")
             return
-        
         user_tables[message.from_user.id] = table_num
         waiting_for_table.pop(message.from_user.id, None)
         await message.answer(
@@ -78,50 +133,62 @@ async def get_table(message: types.Message):
             reply_markup=main_kb
         )
     except ValueError:
-        await message.answer("Пожалуйста, введите номер стола цифрами. Например: 12")
+        await message.answer("Введите номер стола цифрами.")
 
 @dp.message(lambda msg: msg.text == "🛎️ Позвать официанта")
 async def call_waiter(message: types.Message):
     table = user_tables.get(message.from_user.id)
     if not table:
-        await message.answer("❌ Сначала отправьте /start и укажите номер стола.")
+        await message.answer("Сначала отправьте /start и укажите номер стола.")
         return
     
+    username = f"@{message.from_user.username}" if message.from_user.username else "гость"
     try:
-        await bot.send_message(ADMIN_CHAT_ID, f"🛎️ ВЫЗОВ ОФИЦИАНТА — Стол {table}")
+        await bot.send_message(ADMIN_CHAT_ID, f"🛎️ ВЫЗОВ ОФИЦИАНТА — Стол {table} ({username})")
         await message.answer(f"✅ Официант уведомлён о вызове со стола {table}!")
     except Exception as e:
-        await message.answer(f"❌ Ошибка: не удалось отправить уведомление. Сообщите официанту лично.")
-        print(f"Ошибка отправки: {e}")
+        logging.error(f"Ошибка отправки: {e}")
+        await message.answer("❌ Ошибка: не удалось отправить уведомление. Сообщите официанту лично.")
 
 @dp.message(lambda msg: msg.text == "💰 Рассчитать счёт")
 async def ask_bill(message: types.Message):
     table = user_tables.get(message.from_user.id)
     if not table:
-        await message.answer("❌ Сначала отправьте /start и укажите номер стола.")
+        await message.answer("Сначала отправьте /start и укажите номер стола.")
         return
     
+    username = f"@{message.from_user.username}" if message.from_user.username else "гость"
     try:
-        await bot.send_message(ADMIN_CHAT_ID, f"💰 ЗАПРОС СЧЁТА — Стол {table}")
-        await message.answer(f"✅ Официант принесёт счёт на стол {table}.")
+        await bot.send_message(ADMIN_CHAT_ID, f"💰 ЗАПРОС СЧЁТА — Стол {table} ({username})")
+        await message.answer(f"✅ Счёт принесут на стол {table}!")
     except Exception as e:
-        await message.answer(f"❌ Ошибка: не удалось отправить запрос. Сообщите официанту лично.")
-        print(f"Ошибка отправки: {e}")
+        logging.error(f"Ошибка отправки: {e}")
+        await message.answer("❌ Ошибка: не удалось отправить запрос. Сообщите официанту лично.")
 
 @dp.message(Command("reset"))
 async def reset(message: types.Message):
     user_tables.pop(message.from_user.id, None)
     waiting_for_table.pop(message.from_user.id, None)
-    await message.answer("🔄 Стол сброшен. Отправьте /start, чтобы начать заново.", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Стол сброшен. Отправьте /start.", reply_markup=ReplyKeyboardRemove())
+
+@dp.message(Command("getid"))
+async def get_id(message: types.Message):
+    await message.answer(f"ID этого чата: `{message.chat.id}`", parse_mode="Markdown")
 
 # ========== ЗАПУСК БОТА ==========
 async def main():
     print("🚀 Бот запускается...")
+    
+    # Запускаем фоновую задачу очистки в 03:00
+    asyncio.create_task(daily_cleanup())
+    print("✅ Запланирована ежедневная очистка данных в 03:00 по Москве")
+    
     await bot.delete_webhook(drop_pending_updates=True)
     print("✅ Webhook очищен")
+    
     me = await bot.get_me()
     print(f"✅ Бот @{me.username} готов к работе!")
-    print(f"📌 ADMIN_CHAT_ID = {ADMIN_CHAT_ID}")
+    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
