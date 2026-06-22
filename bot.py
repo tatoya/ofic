@@ -25,11 +25,12 @@ dp = Dispatcher()
 user_tables = {}      # user_id -> номер стола
 waiting_for_table = {} # user_id -> ожидание ввода стола
 
-# Клавиатуры
+# ========== КЛАВИАТУРА С ТРЕМЯ КНОПКАМИ ==========
 main_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🛎️ Позвать официанта")],
-        [KeyboardButton(text="💰 Рассчитать счёт")]
+        [KeyboardButton(text="💰 Рассчитать счёт")],
+        [KeyboardButton(text="💨 Вызвать кальянщика")]
     ],
     resize_keyboard=True
 )
@@ -39,31 +40,24 @@ async def daily_cleanup():
     """Очищает все данные пользователей каждый день в 03:00 по Москве"""
     while True:
         now = datetime.now()
-        # Следующие 03:00 по Москве
         next_cleanup = now.replace(hour=3, minute=0, second=0, microsecond=0)
         
-        # Если текущее время уже позже 03:00, переносим на завтра
         if now >= next_cleanup:
             next_cleanup += timedelta(days=1)
         
-        # Сколько секунд ждать до 03:00
         seconds_to_wait = (next_cleanup - now).total_seconds()
         
-        # Переводим в часы и минуты для красивого вывода
         hours = int(seconds_to_wait // 3600)
         minutes = int((seconds_to_wait % 3600) // 60)
         logging.info(f"⏰ Следующая очистка данных через {hours} ч {minutes} мин (в 03:00 по Москве)")
         
-        # Ждём до 03:00
         await asyncio.sleep(seconds_to_wait)
         
-        # Очищаем все данные
         user_tables.clear()
         waiting_for_table.clear()
         
         logging.info("🧹 Очистка данных пользователей выполнена в 03:00 {}".format(datetime.now()))
         
-        # Отправляем уведомление админу
         try:
             await bot.send_message(ADMIN_CHAT_ID, "🧹 Данные пользователей очищены (03:00 по Москве)")
         except:
@@ -75,7 +69,6 @@ async def daily_cleanup():
 async def start(message: types.Message):
     user_id = message.from_user.id
     
-    # Проверяем, есть ли у пользователя сохранённый стол
     if user_id in user_tables:
         old_table = user_tables[user_id]
         await message.answer(
@@ -135,6 +128,7 @@ async def get_table(message: types.Message):
     except ValueError:
         await message.answer("Введите номер стола цифрами.")
 
+# ========== КНОПКА ВЫЗОВА ОФИЦИАНТА ==========
 @dp.message(lambda msg: msg.text == "🛎️ Позвать официанта")
 async def call_waiter(message: types.Message):
     table = user_tables.get(message.from_user.id)
@@ -150,6 +144,7 @@ async def call_waiter(message: types.Message):
         logging.error(f"Ошибка отправки: {e}")
         await message.answer("❌ Ошибка: не удалось отправить уведомление. Сообщите официанту лично.")
 
+# ========== КНОПКА РАССЧИТАТЬ СЧЁТ ==========
 @dp.message(lambda msg: msg.text == "💰 Рассчитать счёт")
 async def ask_bill(message: types.Message):
     table = user_tables.get(message.from_user.id)
@@ -165,6 +160,23 @@ async def ask_bill(message: types.Message):
         logging.error(f"Ошибка отправки: {e}")
         await message.answer("❌ Ошибка: не удалось отправить запрос. Сообщите официанту лично.")
 
+# ========== КНОПКА ВЫЗОВА КАЛЬЯНЩИКА ==========
+@dp.message(lambda msg: msg.text == "💨 Вызвать кальянщика")
+async def call_hookah(message: types.Message):
+    table = user_tables.get(message.from_user.id)
+    if not table:
+        await message.answer("Сначала отправьте /start и укажите номер стола.")
+        return
+    
+    username = f"@{message.from_user.username}" if message.from_user.username else "гость"
+    try:
+        await bot.send_message(ADMIN_CHAT_ID, f"💨 ВЫЗОВ КАЛЬЯНЩИКА — Стол {table} ({username})")
+        await message.answer(f"✅ Кальянщик уведомлён о вызове со стола {table}!")
+    except Exception as e:
+        logging.error(f"Ошибка отправки: {e}")
+        await message.answer("❌ Ошибка: не удалось отправить уведомление. Сообщите кальянщику лично.")
+
+# ========== ОСТАЛЬНЫЕ КОМАНДЫ ==========
 @dp.message(Command("reset"))
 async def reset(message: types.Message):
     user_tables.pop(message.from_user.id, None)
@@ -179,7 +191,6 @@ async def get_id(message: types.Message):
 async def main():
     print("🚀 Бот запускается...")
     
-    # Запускаем фоновую задачу очистки в 03:00
     asyncio.create_task(daily_cleanup())
     print("✅ Запланирована ежедневная очистка данных в 03:00 по Москве")
     
